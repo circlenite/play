@@ -70,6 +70,10 @@
             transition: transform 0.1s;
         }
 
+        .slot:active {
+            transform: scale(0.9);
+        }
+
         .slot.active { 
             border-color: #fff; 
             background: rgba(255,255,255,0.3);
@@ -115,10 +119,10 @@
 
         .btn:active { background: rgba(255,255,255,0.4); }
 
-        #bus-screen, #game-over {
+        #bus-screen {
             position: absolute;
             inset: 0;
-            background: rgba(0,0,50,0.85);
+            background: rgba(0,0,100,0.8);
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -137,11 +141,12 @@
             background: #333;
             border: 2px solid #000;
             border-radius: 4px;
+            overflow: hidden;
         }
 
         .health-bar { width: 100%; height: 100%; background: #4caf50; transition: width 0.3s; }
-        .shield-bar { width: 0%; height: 100%; background: #03a9f4; position: absolute; top: 0; left: 0; transition: width 0.3s; z-index: 5;}
-        
+        .shield-bar { width: 0%; height: 50%; background: #03a9f4; position: absolute; top: -12px; left: 0; transition: width 0.3s; z-index: 5;}
+
         #shield-display {
             position: absolute;
             top: -20px;
@@ -150,17 +155,29 @@
             font-weight: bold;
             color: #03a9f4;
         }
+
+        #game-over {
+            display: none;
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.9);
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            pointer-events: auto;
+        }
     </style>
 </head>
 <body>
 
 <div id="game-container">
     <canvas id="gameCanvas"></canvas>
-    
+
     <div id="ui-layer">
         <div id="bus-screen">
-            <h1>CIRCLENITE</h1>
-            <p>Jump to begin the battle!</p>
+            <h1>CIRCLENITE!</h1>
+            <p>You are in the Battle Bus. Yellow boxes are chests, press OPEN to open them.</p>
             <button class="btn" style="width: 150px; border-radius: 10px;" onclick="startGame()">JUMP!</button>
         </div>
 
@@ -176,7 +193,9 @@
             <div id="health-bar" class="health-bar"></div>
         </div>
 
-        <div class="inventory" id="inventory-ui"></div>
+        <div class="inventory" id="inventory-ui">
+            <!-- Populated via JS -->
+        </div>
 
         <div id="joystick-zone">
             <div id="joystick-base" style="width: 100%; height: 100%; background: rgba(255,255,255,0.1); border-radius: 50%; border: 1px solid rgba(255,255,255,0.3); position: relative;">
@@ -187,12 +206,11 @@
         <div id="action-zone">
             <div class="btn" id="btn-fire">FIRE</div>
             <div class="btn" id="btn-build">BUILD</div>
-            <div class="btn" id="btn-loot">LOOT</div>
-            <div class="btn" style="background:rgba(255,50,50,0.3)" onclick="dropItem()">DROP</div>
-            <div class="btn" id="btn-slot" onclick="cycleSlot()" style="grid-column: span 2; width: auto; border-radius: 10px; height: 40px;">NEXT ITEM</div>
+            <div class="btn" id="btn-loot">OPEN</div>
+            <div class="btn" id="btn-slot" onclick="cycleSlot()">   NEXT ITEM</div>
         </div>
 
-        <div id="game-over" style="display:none;">
+        <div id="game-over">
             <h1 id="result-text">#1 VICTORY ROYALE</h1>
             <button class="btn" style="width: 150px; border-radius: 10px;" onclick="resetGame()">REPLAY</button>
         </div>
@@ -205,12 +223,18 @@
     const joystickKnob = document.getElementById('joystick-knob');
     const joystickBase = document.getElementById('joystick-base');
 
+    // Game Constants
     const WORLD_SIZE = 3500;
     const PLAYER_SPEED = 5.5;
+    const BOT_COUNT = 49;
+    const MAX_HP = 700; 
     const MAX_HP = 500; 
     const MAX_SHIELD = 100;
-    
-    let player, enemies, bullets, chests, walls, storm, droppedItems, gameActive, playersLeft, stormInterval;
+
+    // Game State
+    let player, enemies, bullets, chests, walls, storm, gameActive, playersLeft, stormInterval;
+
+    // Input State
     let joystick = { x: 0, y: 0, active: false };
     let isFiring = false;
 
@@ -219,39 +243,96 @@
         window.addEventListener('resize', resize);
         setupTouch();
         resetGameData();
-        gameLoop();
     }
 
     function resetGameData() {
         player = {
-            x: WORLD_SIZE / 2, y: WORLD_SIZE / 2, hp: MAX_HP, shield: 0, mats: 100, kills: 0, angle: 0,
+            x: WORLD_SIZE / 2,
+            y: WORLD_SIZE / 2,
+            hp: MAX_HP,
+            shield: 0,
+            mats: 100,
+            kills: 0,
+            angle: 0,
             inventory: [
                 {name: 'Starter AR', type: 'gun', rarity: 'common', color: '#888'},
                 {name: 'Pickaxe', type: 'melee', color: '#888'}
             ],
-            activeSlot: 0, isMoving: false, lastShot: 0
+            activeSlot: 0,
+            isMoving: false,
+            lastShot: 0
         };
-        enemies = []; bullets = []; chests = []; walls = []; droppedItems = [];
+
+        enemies = [];
+        bullets = [];
+        chests = [];
+        walls = [];
         storm = { r: 3000, targetR: 3000, x: WORLD_SIZE/2, y: WORLD_SIZE/2 };
         gameActive = false;
-        playersLeft = 50;
-        
-        for(let i=0; i<100; i++) chests.push({ x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE, opened: false });
-        for(let i=0; i<49; i++) enemies.push({ x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE, hp: 100, targetAngle: Math.random() * Math.PI * 2, lastShot: 0 });
+        playersLeft = BOT_COUNT + 1;
+        isFiring = false;
+
+        if (stormInterval) clearInterval(stormInterval);
+
+        // Spawn Chests
+        for(let i=0; i<120; i++) {
+            chests.push({
+                x: Math.random() * WORLD_SIZE,
+                y: Math.random() * WORLD_SIZE,
+                opened: false
+            });
+        }
+
+        // Spawn Bots
+        for(let i=0; i<BOT_COUNT; i++) {
+            enemies.push({
+                x: Math.random() * WORLD_SIZE,
+                y: Math.random() * WORLD_SIZE,
+                hp: 100,
+                id: i,
+                targetAngle: Math.random() * Math.PI * 2,
+                lastShot: 0
+            });
+        }
         updateUI();
     }
 
-    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
 
     function setupTouch() {
-        joystickBase.addEventListener('touchstart', (e) => { e.preventDefault(); joystick.active = true; handleJoystick(e); }, {passive: false});
-        window.addEventListener('touchmove', (e) => { if(joystick.active) handleJoystick(e); }, {passive: false});
-        window.addEventListener('touchend', () => { joystick.active = false; player.isMoving = false; });
+        // Joystick Handling
+        joystickBase.addEventListener('touchstart', (e) => { 
+            e.preventDefault(); 
+            joystick.active = true; 
+            handleJoystick(e); 
+        }, {passive: false});
 
+        window.addEventListener('touchmove', (e) => { 
+            if(joystick.active) handleJoystick(e); 
+        }, {passive: false});
+
+        window.addEventListener('touchend', (e) => { 
+            joystick.active = false; 
+            joystickKnob.style.top = '50%'; 
+            joystickKnob.style.left = '50%';
+            player.isMoving = false;
+        });
+
+        // Fire Button logic
         const fireBtn = document.getElementById('btn-fire');
-        fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); isFiring = true; }, {passive: false});
-        fireBtn.addEventListener('touchend', () => isFiring = false);
-        
+        const startFire = (e) => { if(e) e.preventDefault(); isFiring = true; };
+        const stopFire = (e) => { if(e) e.preventDefault(); isFiring = false; };
+
+        fireBtn.addEventListener('touchstart', startFire, {passive: false});
+        fireBtn.addEventListener('touchend', stopFire, {passive: false});
+        fireBtn.addEventListener('mousedown', startFire);
+        fireBtn.addEventListener('mouseup', stopFire);
+        fireBtn.addEventListener('mouseleave', stopFire);
+
+        // Other action buttons
         document.getElementById('btn-build').addEventListener('touchstart', (e) => { e.preventDefault(); buildWall(); }, {passive: false});
         document.getElementById('btn-loot').addEventListener('touchstart', (e) => { e.preventDefault(); tryLoot(); }, {passive: false});
     }
@@ -259,76 +340,83 @@
     function handleJoystick(e) {
         const touch = e.touches[0];
         const rect = joystickBase.getBoundingClientRect();
-        const dx = touch.clientX - (rect.left + rect.width / 2);
-        const dy = touch.clientY - (rect.top + rect.height / 2);
-        const dist = Math.hypot(dx, dy);
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+
+        let dx = touch.clientX - centerX;
+        let dy = touch.clientY - centerY;
+        const dist = Math.sqrt(dx*dx + dy*dy);
         const maxDist = rect.width / 2;
-        const finalDist = Math.min(dist, maxDist);
-        const angle = Math.atan2(dy, dx);
-        
-        joystickKnob.style.left = `calc(50% + ${Math.cos(angle) * finalDist}px)`;
-        joystickKnob.style.top = `calc(50% + ${Math.sin(angle) * finalDist}px)`;
-        
-        player.angle = angle;
+
+        if (dist > maxDist) {
+            dx = (dx / dist) * maxDist;
+            dy = (dy / dist) * maxDist;
+        }
+
+        joystickKnob.style.left = `calc(50% + ${dx}px)`;
+        joystickKnob.style.top = `calc(50% + ${dy}px)`;
+
+        joystick.x = dx / maxDist;
+        joystick.y = dy / maxDist;
         player.isMoving = true;
+        player.angle = Math.atan2(dy, dx);
     }
 
     function startGame() {
         document.getElementById('bus-screen').style.display = 'none';
+        document.getElementById('game-over').style.display = 'none';
         gameActive = true;
-        stormInterval = setInterval(() => { if(gameActive) storm.targetR *= 0.8; }, 15000);
+
+        stormInterval = setInterval(() => {
+            if(!gameActive) return;
+            storm.targetR *= 0.75;
+            if(storm.targetR < 150) storm.targetR = 150;
+        }, 12000);
     }
 
-    function resetGame() { location.reload(); }
+    function resetGame() {
+        resetGameData();
+        document.getElementById('bus-screen').style.display = 'flex';
+        document.getElementById('game-over').style.display = 'none';
+    }
 
-    function dropItem() {
-        if(!gameActive || player.inventory.length <= 1) return;
-        const item = player.inventory[player.activeSlot];
-        if(item.name === "Pickaxe") return;
-
-        droppedItems.push({
-            ...item,
-            x: player.x + Math.cos(player.angle) * 60,
-            y: player.y + Math.sin(player.angle) * 60
-        });
-
-        player.inventory.splice(player.activeSlot, 1);
-        player.activeSlot = 0;
-        updateUI();
+    function buildWall() {
+        if(!gameActive) return;
+        if(player.mats >= 10) {
+            const wx = player.x + Math.cos(player.angle) * 70;
+            const wy = player.y + Math.sin(player.angle) * 70;
+            walls.push({ x: wx, y: wy, hp: 150 });
+            player.mats -= 10;
+            updateUI();
+        }
     }
 
     function tryLoot() {
-        // Pick up dropped items first
-        for(let i = droppedItems.length - 1; i >= 0; i--) {
-            if(Math.hypot(player.x - droppedItems[i].x, player.y - droppedItems[i].y) < 70) {
-                if(player.inventory.length < 5) {
-                    player.inventory.push(droppedItems.splice(i, 1)[0]);
-                    updateUI(); return;
-                }
-            }
-        }
-
-        // Open Chests
+        if(!gameActive) return;
         chests.forEach(c => {
-            if(!c.opened && Math.hypot(player.x - c.x, player.y - c.y) < 80) {
+            const dist = Math.hypot(player.x - c.x, player.y - c.y);
+            if(dist < 100 && !c.opened) {
                 c.opened = true;
                 const loots = [
                     {name: 'Scoped AR', type: 'gun', rarity: 'rare', color: '#0070dd'},
                     {name: 'Gold Pump', type: 'gun', rarity: 'legendary', color: '#ff8000'},
-                    {name: 'Shield Pot', type: 'shield', color: '#03a9f4'},
+                    {name: 'Minigun', type: 'gun', rarity: 'legendary', color: '#ff8000'},
                     {name: 'Med Kit', type: 'heal', color: '#f44336'}
                 ];
-                player.inventory.push(loots[Math.floor(Math.random()*loots.length)]);
-                player.mats += 30;
+                const item = loots[Math.floor(Math.random() * loots.length)];
+                if(player.inventory.length < 5) {
+                    player.inventory.push(item);
+                }
+                player.mats += 40;
                 updateUI();
             }
         });
     }
 
-    function buildWall() {
-        if(player.mats >= 10) {
-            walls.push({ x: player.x + Math.cos(player.angle)*70, y: player.y + Math.sin(player.angle)*70, hp: 150 });
-            player.mats -= 10; updateUI();
+    function selectSlot(index) {
+        if (index < player.inventory.length) {
+            player.activeSlot = index;
+            updateUI();
         }
     }
 
@@ -340,10 +428,15 @@
     function updateUI() {
         document.getElementById('mats-count').innerText = `Wood: ${player.mats}`;
         document.getElementById('kills-count').innerText = `Elims: ${player.kills}`;
-        document.getElementById('players-count').innerText = `Players: ${playersLeft}`;
-        document.getElementById('health-bar').style.width = (player.hp / MAX_HP * 100) + '%';
-        document.getElementById('shield-bar').style.width = (player.shield / MAX_SHIELD * 100) + '%';
-        document.getElementById('shield-display').innerText = `Shield: ${Math.floor(player.shield)}`;
+        document.getElementById('players-count').innerText = `Players Left: ${playersLeft}`;
+
+        const healthBar = document.getElementById('health-bar');
+        const shieldBar = document.getElementById('shield-bar');
+        const shieldDisplay = document.getElementById('shield-display');
+
+        healthBar.style.width = ((player.hp / MAX_HP) * 100) + '%';
+        shieldBar.style.width = ((player.shield / MAX_SHIELD) * 100) + '%';
+        shieldDisplay.innerText = `Shield: ${Math.floor(player.shield)}`;
 
         const invUI = document.getElementById('inventory-ui');
         invUI.innerHTML = '';
@@ -351,101 +444,150 @@
             const slot = document.createElement('div');
             slot.className = `slot ${i === player.activeSlot ? 'active' : ''} ${item.rarity || ''}`;
             slot.innerText = item.name;
+            // ADDED: Click/Touch listener to switch to this weapon
+            slot.onclick = (e) => {
+                e.stopPropagation();
+                selectSlot(i);
+            };
             invUI.appendChild(slot);
         });
     }
 
-    function update() {
-        if(!gameActive) return;
+    function gameLoop() {
+        if(gameActive) {
+            update();
+            draw();
+        }
+        requestAnimationFrame(gameLoop);
+    }
 
+    function update() {
         if(player.isMoving) {
-            player.x = Math.max(0, Math.min(WORLD_SIZE, player.x + Math.cos(player.angle) * PLAYER_SPEED));
-            player.y = Math.max(0, Math.min(WORLD_SIZE, player.y + Math.sin(player.angle) * PLAYER_SPEED));
+            player.x += Math.cos(player.angle) * PLAYER_SPEED;
+            player.y += Math.sin(player.angle) * PLAYER_SPEED;
+            player.x = Math.max(0, Math.min(WORLD_SIZE, player.x));
+            player.y = Math.max(0, Math.min(WORLD_SIZE, player.y));
         }
 
         if(isFiring) {
-            const item = player.inventory[player.activeSlot];
             const now = Date.now();
-            if(item.type === 'gun' && now - player.lastShot > 150) {
-                bullets.push({ x: player.x, y: player.y, vx: Math.cos(player.angle)*20, vy: Math.sin(player.angle)*20, owner: 'player' });
+            const currentItem = player.inventory[player.activeSlot];
+            if(currentItem && currentItem.type === 'gun' && now - player.lastShot > 140) {
+                bullets.push({
+                    x: player.x,
+                    y: player.y,
+                    vx: Math.cos(player.angle) * 20,
+                    vy: Math.sin(player.angle) * 20,
+                    owner: 'player'
+                });
                 player.lastShot = now;
-            } else if (item.type === 'shield' && player.shield < MAX_SHIELD) {
-                player.shield = Math.min(MAX_SHIELD, player.shield + 50);
-                player.inventory.splice(player.activeSlot, 1); player.activeSlot = 0; updateUI(); isFiring = false;
-            } else if (item.type === 'heal' && player.hp < MAX_HP) {
+            } else if (currentItem && currentItem.type === 'melee' && now - player.lastShot > 350) {
+                enemies.forEach(e => {
+                    if(Math.hypot(player.x - e.x, player.y - e.y) < 80) e.hp -= 35;
+                });
+                player.lastShot = now;
+            } else if (currentItem && currentItem.type === 'heal' && player.hp < MAX_HP) {
                 player.hp = Math.min(MAX_HP, player.hp + 100);
-                player.inventory.splice(player.activeSlot, 1); player.activeSlot = 0; updateUI(); isFiring = false;
+                player.inventory.splice(player.activeSlot, 1);
+                player.activeSlot = 0;
+                updateUI();
+                isFiring = false;
             }
         }
 
-        if(storm.r > storm.targetR) storm.r -= 0.5;
-        if(Math.hypot(player.x - storm.x, player.y - storm.y) > storm.r) player.hp -= 0.2;
+        if(storm.r > storm.targetR) storm.r -= 0.6;
+        const distFromCenter = Math.hypot(player.x - storm.x, player.y - storm.y);
+        if(distFromCenter > storm.r) {
+            player.hp -= 0.25;
+            updateUI();
+        }
 
-        bullets.forEach((b, i) => {
-            b.x += b.vx; b.y += b.vy;
+        for(let i = bullets.length - 1; i >= 0; i--) {
+            const b = bullets[i];
+            b.x += b.vx;
+            b.y += b.vy;
+            let hit = false;
             if(b.owner === 'player') {
-                enemies.forEach(e => { if(Math.hypot(b.x-e.x, b.y-e.y) < 30) { e.hp -= 40; b.hit = true; } });
+                enemies.forEach(e => {
+                    if(Math.hypot(b.x - e.x, b.y - e.y) < 30) { e.hp -= 40; hit = true; }
+                });
             } else {
-                if(Math.hypot(b.x-player.x, b.y-player.y) < 30) { 
-                    if(player.shield > 0) player.shield -= 20; else player.hp -= 20; 
-                    b.hit = true; updateUI(); 
+                if(Math.hypot(b.x - player.x, b.y - player.y) < 30) {
+                    if(player.shield > 0) player.shield -= 25;
+                    else player.hp -= 25;
+                    updateUI();
+                    hit = true;
                 }
             }
-        });
-        bullets = bullets.filter(b => !b.hit && b.x > 0 && b.x < WORLD_SIZE);
+            if(hit || b.x < 0 || b.x > WORLD_SIZE || b.y < 0 || b.y > WORLD_SIZE) bullets.splice(i, 1);
+        }
 
         enemies.forEach((e, i) => {
-            e.x += Math.cos(e.targetAngle) * 2; e.y += Math.sin(e.targetAngle) * 2;
-            if(Math.random() < 0.01) e.targetAngle = Math.random() * Math.PI * 2;
-            if(Math.hypot(e.x-player.x, e.y-player.y) < 400 && Date.now() - e.lastShot > 2000) {
+            e.x += Math.cos(e.targetAngle) * 2.5;
+            e.y += Math.sin(e.targetAngle) * 2.5;
+            if(Math.random() < 0.015) e.targetAngle = Math.random() * Math.PI * 2;
+            const d = Math.hypot(e.x - player.x, e.y - player.y);
+            if(d < 500 && Date.now() - e.lastShot > 1800) {
                 const ang = Math.atan2(player.y - e.y, player.x - e.x);
-                bullets.push({ x: e.x, y: e.y, vx: Math.cos(ang)*12, vy: Math.sin(ang)*12, owner: 'enemy' });
+                bullets.push({ x: e.x, y: e.y, vx: Math.cos(ang) * 14, vy: Math.sin(ang) * 14, owner: 'enemy' });
                 e.lastShot = Date.now();
             }
-            if(e.hp <= 0) { enemies.splice(i, 1); playersLeft--; player.kills++; player.shield = Math.min(MAX_SHIELD, player.shield + 25); updateUI(); }
+            if(e.hp <= 0 || Math.hypot(e.x - storm.x, e.y - storm.y) > storm.r + 400) {
+                enemies.splice(i, 1);
+                if (e.hp <= 0) { player.kills++; player.shield = Math.min(MAX_SHIELD, player.shield + 50); }
+                playersLeft--;
+                updateUI();
+            }
         });
 
-        if(player.hp <= 0) { gameActive = false; document.getElementById('game-over').style.display = 'flex'; document.getElementById('result-text').innerText = "ELIMINATED"; }
+        if(player.hp <= 0) endGame(`#${playersLeft} - ELIMINATED`);
+        else if (playersLeft <= 1) endGame("#1 VICTORY ROYALE");
+    }
+
+    function endGame(text) {
+        gameActive = false;
+        isFiring = false;
+        clearInterval(stormInterval);
+        document.getElementById('result-text').innerText = text;
+        document.getElementById('game-over').style.display = 'flex';
     }
 
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const camX = canvas.width/2 - player.x;
+        const camY = canvas.height/2 - player.y;
         ctx.save();
-        ctx.translate(canvas.width/2 - player.x, canvas.height/2 - player.y);
-        
+        ctx.translate(camX, camY);
         ctx.fillStyle = '#45a049'; ctx.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
-        
-        // Draw Chests
-        chests.forEach(c => { ctx.fillStyle = c.opened ? '#444' : '#FFD700'; ctx.fillRect(c.x-25, c.y-20, 50, 40); });
-
-        // Draw Dropped Items with Glow
-        droppedItems.forEach(item => {
-            const pulse = Math.sin(Date.now()/200) * 5;
-            const grad = ctx.createRadialGradient(item.x, item.y, 5, item.x, item.y, 30 + pulse);
-            grad.addColorStop(0, item.color); grad.addColorStop(1, 'transparent');
-            ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(item.x, item.y, 35 + pulse, 0, Math.PI*2); ctx.fill();
-            ctx.fillStyle = item.color; ctx.beginPath(); ctx.arc(item.x, item.y, 12, 0, Math.PI*2); ctx.fill();
-            ctx.strokeStyle = '#fff'; ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        for(let i=0; i<=WORLD_SIZE; i+=250) {
+            ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, WORLD_SIZE); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(WORLD_SIZE, i); ctx.stroke();
+        }
+        chests.forEach(c => {
+            ctx.fillStyle = c.opened ? '#444' : '#FFD700'; ctx.fillRect(c.x-25, c.y-20, 50, 40);
+            if(!c.opened) { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.strokeRect(c.x-30, c.y-25, 60, 50); }
         });
-
-        walls.forEach(w => { ctx.fillStyle = '#5d4037'; ctx.fillRect(w.x-30, w.y-30, 60, 60); });
-        enemies.forEach(e => { ctx.fillStyle = '#e91e63'; ctx.beginPath(); ctx.arc(e.x, e.y, 25, 0, Math.PI*2); ctx.fill(); });
+        ctx.fillStyle = '#5d4037'; walls.forEach(w => ctx.fillRect(w.x-30, w.y-30, 60, 60));
+        enemies.forEach(e => {
+            ctx.fillStyle = '#e91e63'; ctx.beginPath(); ctx.arc(e.x, e.y, 25, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = 'black'; ctx.fillRect(e.x-25, e.y-45, 50, 8);
+            ctx.fillStyle = '#ff5252'; ctx.fillRect(e.x-25, e.y-45, (e.hp/100)*50, 8);
+        });
         ctx.fillStyle = 'yellow'; bullets.forEach(b => { ctx.beginPath(); ctx.arc(b.x, b.y, 6, 0, Math.PI*2); ctx.fill(); });
-
-        // Storm
-        ctx.strokeStyle = 'rgba(150, 0, 255, 0.5)'; ctx.lineWidth = 15;
-        ctx.beginPath(); ctx.arc(storm.x, storm.y, storm.r, 0, Math.PI*2); ctx.stroke();
-
-        // Player
+        ctx.strokeStyle = 'rgba(150, 0, 255, 0.5)'; ctx.lineWidth = 20;
+        ctx.beginPath(); ctx.arc(storm.x, storm.y, storm.r, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = 'rgba(150, 0, 255, 0.15)'; ctx.beginPath();
+        ctx.rect(-2000, -2000, WORLD_SIZE+4000, WORLD_SIZE+4000);
+        ctx.arc(storm.x, storm.y, storm.r, 0, Math.PI * 2, true); ctx.fill();
         ctx.save(); ctx.translate(player.x, player.y); ctx.rotate(player.angle);
         ctx.fillStyle = '#2196f3'; ctx.beginPath(); ctx.arc(0, 0, 26, 0, Math.PI*2); ctx.fill();
         ctx.fillStyle = '#333'; ctx.fillRect(18, -8, 40, 16); ctx.restore();
-
         ctx.restore();
     }
 
-    function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
     init();
+    gameLoop();
 </script>
 </body>
 </html>
